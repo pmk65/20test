@@ -1414,7 +1414,7 @@ JSONEditor.Validator = Class.extend({
           if(typeof value[schema.required[i]] === "undefined") {
             var editor = this.jsoneditor.getEditor(path + '.' + schema.required[i]);
             // Ignore required error if editor is of type "button" or "info"
-            if (editor && ['botton', 'info'].indexOf(editor.format) === -1) continue;
+            if (editor && ['button', 'info'].indexOf(editor.schema.format || editor.schema.type) !== -1) continue;
             errors.push({
               path: path,
               property: 'required',
@@ -1621,7 +1621,27 @@ JSONEditor.Validator = Class.extend({
       });
     }
 
+    errors = this._removeDuplicateErrors(errors);
+
     return errors;
+  },
+  _removeDuplicateErrors: function(arr) {
+    // Remove duplicate errors and add "errorcount" property
+    return arr.reduce(function (ar, obj) {
+      var first = true;
+      if (!ar) ar = [];
+      ar.forEach(function (a) {
+        if (a.message === obj.message && a.path === obj.path && a.property === obj.property) {
+          a.errorcount++;
+          first = false;
+        }
+      });
+      if (first) {
+        obj.errorcount = 1;
+        ar.push(obj);
+      }
+      return ar;
+    }, []);
   },
   _checkType: function(type, value) {
     // Simple types
@@ -1714,6 +1734,7 @@ JSONEditor.AbstractEditor = Class.extend({
     this.key = this.parent !== undefined ? this.path.split('.').slice(this.parent.path.split('.').length).join('.') : this.path;
 
     this.link_watchers = [];
+    this.watchLoop = false;  
 
     if(options.container) this.setContainer(options.container);
     this.registerDependencies();
@@ -1852,7 +1873,7 @@ JSONEditor.AbstractEditor = Class.extend({
     };
 
     if(this.schema.hasOwnProperty('watch')) {
-      var path,path_parts,first,root,adjusted_path;
+      var path,path_parts,first,root,adjusted_path, my_path = self.container.getAttribute('data-schemapath');
 
       for(var name in this.schema.watch) {
         if(!this.schema.watch.hasOwnProperty(name)) continue;
@@ -1877,6 +1898,7 @@ JSONEditor.AbstractEditor = Class.extend({
         // Keep track of the root node and path for use when rendering the template
         adjusted_path = root.getAttribute('data-schemapath') + '.' + path_parts.join('.');
 
+        if(my_path.startsWith(adjusted_path)) self.watchLoop = true;
         self.jsoneditor.watch(adjusted_path,self.watch_listener);
 
         self.watched[name] = adjusted_path;
@@ -2505,7 +2527,9 @@ JSONEditor.defaults.editors.string = JSONEditor.AbstractEditor.extend({
 
     // Compile and store the template
     if(this.schema.template) {
-      this.template = this.jsoneditor.compileTemplate(this.schema.template, this.template_engine);
+      var callback = this.expandCallbacks('template', {template: this.schema.template});
+      if (typeof callback.template === 'function') this.template = callback.template;
+      else this.template = this.jsoneditor.compileTemplate(this.schema.template, this.template_engine);
       this.refreshValue();
     }
     else {
@@ -2515,7 +2539,7 @@ JSONEditor.defaults.editors.string = JSONEditor.AbstractEditor.extend({
   setupCleave: function(el) {
     // Enable cleave.js support if library is loaded and config is available
     var options = this.expandCallbacks('cleave', $extend({}, JSONEditor.defaults.options.cleave || {}, this.options.cleave || {}));
-    if (Array.Keys(options).length > 0) {
+    if (typeof options == 'object' && Object.keys(options).length > 0) {
       this.cleave_instance = new window.Cleave(el, options);
     }
   },
@@ -2706,7 +2730,9 @@ JSONEditor.defaults.editors.hidden = JSONEditor.AbstractEditor.extend({
 
     // Compile and store the template
     if (this.schema.template) {
-      this.template = this.jsoneditor.compileTemplate(this.schema.template, this.template_engine);
+      var callback = this.expandCallbacks('template', {template: this.schema.template});
+      if (typeof callback.template === 'function') this.template = callback.template;
+      else this.template = this.jsoneditor.compileTemplate(this.schema.template, this.template_engine);
       this.refreshValue();
     }
     else {
@@ -3417,13 +3443,7 @@ JSONEditor.defaults.editors.object = JSONEditor.AbstractEditor.extend({
       this.addproperty_holder.appendChild(spacer);
 
       // Close properties modal if clicked outside modal
-      document.addEventListener('click', function(e) {
-          if (!this.addproperty_holder.contains(e.target) && this.adding_property) {
-            e.preventDefault();
-            e.stopPropagation();
-            this.toggleAddProperty();
-          }
-      }.bind(this));
+      document.addEventListener('click', this.onOutsideModalClick);
 
       // Description
       if(this.schema.description) {
@@ -3808,6 +3828,13 @@ JSONEditor.defaults.editors.object = JSONEditor.AbstractEditor.extend({
       self.layoutEditors();
     }
   },
+  onOutsideModalClick: function() {
+    if (this.addproperty_holder && !this.addproperty_holder.contains(e.target) && this.adding_property) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.toggleAddProperty();
+    }
+  },
   onChildEditorChange: function(editor) {
     this.refreshValue();
     this._super(editor);
@@ -3830,6 +3857,7 @@ JSONEditor.defaults.editors.object = JSONEditor.AbstractEditor.extend({
     this.cached_editors = null;
     if(this.editor_holder && this.editor_holder.parentNode) this.editor_holder.parentNode.removeChild(this.editor_holder);
     this.editor_holder = null;
+    document.removeEventListener('click', this.onOutsideModalClick);
 
     this._super();
   },
@@ -4195,12 +4223,15 @@ JSONEditor.defaults.editors.array = JSONEditor.AbstractEditor.extend({
       }
     }
     else {
+        // compact mode
+        this.title = this.theme.getHeader('');
+        this.container.appendChild(this.title);
         this.panel = this.theme.getIndentedPanel();
         this.container.appendChild(this.panel);
         this.title_controls = this.theme.getHeaderButtonHolder();
-        this.panel.appendChild(this.title_controls);
-        this.controls = this.theme.getButtonHolder();
-        this.panel.appendChild(this.controls);
+        this.title.appendChild(this.title_controls);
+        this.controls = this.theme.getHeaderButtonHolder();
+        this.title.appendChild(this.controls);
         this.row_holder = document.createElement('div');
         this.panel.appendChild(this.row_holder);
     }
@@ -5650,7 +5681,7 @@ JSONEditor.defaults.editors.multiple = JSONEditor.AbstractEditor.extend({
         var check = self.path+'.'+check_part+'['+i+']';
         var new_errors = [];
         $each(errors, function(j,error) {
-          if(error.path.substr(0,check.length)===check) {
+          if(error.path === check.substr(0,error.path.length)) {
             var new_error = $extend({},error);
             new_error.path = self.path+new_error.path.substr(check.length);
             new_errors.push(new_error);
@@ -5857,6 +5888,7 @@ JSONEditor.defaults.editors.select = JSONEditor.AbstractEditor.extend({
     this.enum_values = [];
     this.enum_display = [];
     var i;
+    var callback;
 
     // Enum options enumerated
     if(this.schema["enum"]) {
@@ -5930,18 +5962,23 @@ JSONEditor.defaults.editors.select = JSONEditor.AbstractEditor.extend({
           }
         }
       }
-
       // Now, enumSource is an array of sources
       // Walk through this array and fix up the values
       for(i=0; i<this.enumSource.length; i++) {
         if(this.enumSource[i].value) {
-          this.enumSource[i].value = this.jsoneditor.compileTemplate(this.enumSource[i].value, this.template_engine);
+          callback = this.expandCallbacks('template', {template: this.enumSource[i].value});
+          if (typeof callback.template === 'function') this.enumSource[i].value = callback.template;
+          else this.enumSource[i].value = this.jsoneditor.compileTemplate(this.enumSource[i].value, this.template_engine);
         }
         if(this.enumSource[i].title) {
-          this.enumSource[i].title = this.jsoneditor.compileTemplate(this.enumSource[i].title, this.template_engine);
+          callback = this.expandCallbacks('template', {template: this.enumSource[i].title});
+          if (typeof callback.template === 'function') this.enumSource[i].title = callback.template;
+          else this.enumSource[i].title = this.jsoneditor.compileTemplate(this.enumSource[i].title, this.template_engine);
         }
-        if(this.enumSource[i].filter) {
-          this.enumSource[i].filter = this.jsoneditor.compileTemplate(this.enumSource[i].filter, this.template_engine);
+        if(this.enumSource[i].filter && this.enumSource[i].value) {
+          callback = this.expandCallbacks('template', {template: this.enumSource[i].filter});
+          if (typeof callback.template === 'function') this.enumSource[i].filter = callback.template;
+          else this.enumSource[i].filter = this.jsoneditor.compileTemplate(this.enumSource[i].filter, this.template_engine);
         }
       }
     }
@@ -6078,10 +6115,22 @@ JSONEditor.defaults.editors.select = JSONEditor.AbstractEditor.extend({
               }
             }
 
-            // TODO: sort
+            if (this.enumSource[i].sort) {
+              (function(item_values, item_titles, order) {
+                item_values.map(function (v, i) {
+                  return { v: v, t: item_titles[i] };
+                }).sort(function(a, b) {
+                  return ((a.v < b.v) ? -order : ((a.v == b.v) ? 0 : order));
+                }).forEach(function(v, i) {
+                  item_values[i] = v.v;
+                  item_titles[i] = v.t;
+                });
+              }.bind(null, item_values, item_titles, this.enumSource[i].sort == 'desc' ? 1 : -1))();
+            }
 
             select_options = select_options.concat(item_values);
             select_titles = select_titles.concat(item_titles);
+
           }
         }
       }
@@ -6102,7 +6151,7 @@ JSONEditor.defaults.editors.select = JSONEditor.AbstractEditor.extend({
       else {
         this.input.value = select_options[0];
         this.value = this.typecast(select_options[0] || "");
-        if(this.parent) this.parent.onChildEditorChange(this);
+        if(this.parent && !this.watchLoop) this.parent.onChildEditorChange(this);
         else this.jsoneditor.onChange();
         this.jsoneditor.notifyWatchers(this.path);
       }
@@ -7690,6 +7739,12 @@ JSONEditor.defaults.editors.radio = JSONEditor.defaults.editors.select.extend({
 
     this.control = this.theme.getFormControl(this.label, radioContainerWrapper, this.description, this.infoButton);
     this.container.appendChild(this.control);
+
+    // Any special formatting that needs to happen after the input is added to the dom
+    window.requestAnimationFrame(function() {
+      if(self.input.parentNode) self.afterInputReady();
+    });
+
   },
   enable: function() {
     if(!this.always_disabled) {
@@ -10491,7 +10546,7 @@ JSONEditor.defaults.themes.html = JSONEditor.AbstractTheme.extend({
     input.errmsg.appendChild(document.createTextNode(text));
   },
   removeInputError: function(input) {
-    input.style.borderColor = '';
+    if(input.style) input.style.borderColor = '';
     if(input.errmsg) input.errmsg.style.display = 'none';
   },
   getProgressBar: function() {
@@ -11253,8 +11308,11 @@ JSONEditor.defaults.themes.spectre = JSONEditor.AbstractTheme.extend({
   // Custom stylesheet rules. (Does not suppert comma separated selectors)
   //  Will create a stylesheet in document head with the id "theme-spectre" if not exists.
   rules: {
+    '*': '--primary-color:#5755d9;--gray-color:#bcc3ce;--light-color:#fff', // CSS variables
     '.slider:focus': 'box-shadow: none', // Remove slider focus shadow
     'h4>label+.btn-group': 'margin-left:1rem', // Add margin between header and top buttons
+    '.text-right>button': 'margin-right: 0 !important', // Remove right margin on right-aligned button
+    '.text-left>button': 'margin-left: 0 !important', // Remove left margin on left-aligned button
     '.json-editor-btntype-properties+div>.property-selector': 'font-size: .7rem;font-weight: normal; max-height:260px!important;width:395px!important', // Fix fontsize in Properties modal and increase size of modal box
     '.json-editor-btntype-properties+div>.property-selector .form-checkbox': 'margin:0', // Remove checkbox margins in Properties modal
     'textarea': 'width:100%;min-height: 2rem;resize:vertical',  // Prevent textarea from being resized horizontally
@@ -11265,6 +11323,7 @@ JSONEditor.defaults.themes.spectre = JSONEditor.AbstractTheme.extend({
     'div[data-schematype]:not([data-schematype="object"]):hover' : 'background-color: #eee', // Hover on input block (Should be removed in final version)
     '.je-table-border td': 'border: .05rem solid #dadee4 !important', // Option: table_border
     '.btn-info' : 'font-size:.5rem;font-weight:bold;height:.8rem;padding:.15rem 0;line-height:.8;margin:.3rem 0 .3rem .1rem;', // Infobutton
+    '.je-label+select': 'min-width: 5rem', // Select box for oneOf, anyOf and allOf
     '.je-label': 'font-weight: 600', // Option: label_bold
     '.btn-action.btn-info': 'width: .8rem;', // Infobutton
     '.je-border': 'border:.05rem solid #dadee4', // Option: object_border
@@ -11275,7 +11334,17 @@ JSONEditor.defaults.themes.spectre = JSONEditor.AbstractTheme.extend({
     '.je-desc': 'font-size: smaller;margin: .2rem 0;', // Description
 /*    '.columns': 'border:1px solid rgba(255,0,0,.5);',
     '.columns .columns': 'border:1px solid rgba(0,255,0,.5);',*/
-    '.columns .container.je-noindent': 'padding-left:0;padding-right:0;' // Option: object_indent
+    '.columns .container.je-noindent': 'padding-left:0;padding-right:0;', // Option: object_indent
+    /* Adjustments for Selectize styling */
+    '.selectize-control.multi .item': 'background: var(--primary-color) !important;',
+    /* Adjustments for Select2 styling */
+    '.select2-container--default .select2-selection--single .select2-selection__arrow': 'display: none',
+    '.select2-container--default .select2-selection--single': 'border: none;',
+    '.select2-container .select2-selection--single .select2-selection__rendered': 'padding: 0; ',
+    '.select2-container .select2-search--inline .select2-search__field': 'margin-top: 0;',
+    '.select2-container--default.select2-container--focus .select2-selection--multiple': 'border: .05rem solid var(--gray-color);',
+    '.select2-container--default .select2-selection--multiple .select2-selection__choice': 'margin:.4rem .2rem .2rem 0;padding:2px 5px;background-color:var(--primary-color);color:var(--light-color)',
+    '.select2-container--default .select2-search--inline .select2-search__field': 'line-height: normal;'
   },
   // Functions for setting up the grid container, row and columns
   setGridColumnSize: function(el,size, offset) {
@@ -11334,12 +11403,12 @@ JSONEditor.defaults.themes.spectre = JSONEditor.AbstractTheme.extend({
     el.classList.remove('btn-group');
     if (button_align === 'center') el.classList.add('text-center');
     else if (button_align === 'right') el.classList.add('text-right');
+    else el.classList.add('text-left');
     return el;
   },
   getFormButton: function(text, icon, title) {
     var el = this._super(text, icon, title);
     el.classList.add('btn', 'btn-primary', 'mx-2', 'my-1');
-    //el.classList..remove('btn-sm');
     if (this.options.input_size !== 'small') el.classList.remove('btn-sm');
     if (this.options.input_size === 'large') el.classList.add('btn-lg');
     return el;
@@ -11491,6 +11560,7 @@ console.log('mul');
     inputGroup.appendChild(input);
     for(var i=0;i<buttons.length;i++) {
       buttons[i].classList.add('input-group-btn');
+      buttons[i].classList.remove('btn-sm','mr-2', 'my-1');
       inputGroup.appendChild(buttons[i]);
     }
 
@@ -11584,15 +11654,35 @@ console.log('mul');
     else row.container.style.display = 'none';
   },
 
-
-  // Controls output of errormessages displayed in form
   afterInputReady: function(input) {
+    if (input.localName === 'select') {
+      // Selectize adjustments
+      if (input.classList.contains('selectized')) {
+        var selectized = input.nextSibling;
+        if (selectized) {
+          // Remove Spectre class 'form-select' as this conflicts with Selectize styling
+          selectized.classList.remove('form-select');
+          $each(selectized.querySelectorAll('.form-select'), function(i, el) {
+            el.classList.remove('form-select');
+          });
+        }
+      }
+      // Select2 ajustments
+      else if (input.classList.contains('select2-hidden-accessible')) {
+        var select2 = input.nextSibling,
+            single = select2 && select2.querySelector('.select2-selection--single');
+        // Add Spectre 'form-select' to single-select2 elements
+        if (single) select2.classList.add('form-select');
+      }
+    }
+
     if (input.controlgroup) return;
     input.controlgroup = this.closest(input, '.form-group');
     if (this.closest(input, '.compact')) {
       input.controlgroup.style.marginBottom = 0;
     }
   },
+  // Controls output of errormessages displayed in form
   addInputError: function(input, text) {
     if (!input.controlgroup) return;
     input.controlgroup.classList.add('has-error');
@@ -11613,379 +11703,441 @@ console.log('mul');
 });
 
 JSONEditor.defaults.themes.tailwind = JSONEditor.AbstractTheme.extend({
-    getGridRow: function () {
-        var el = document.createElement("div");
-        el.classList.add("flex", "flex-wrap");
-        return el;
-    },
-    getGridColumn: function () {
-        var el = document.createElement("div");
-        return el;
-    },
-    setGridColumnSize: function (el, size, offset) {
-        if (size < 12) {
-            el.classList.add("w-" + size + "/12", "px-1");
-        } else {
-            el.classList.add("w-full", "px-1");
-        }
-        if (offset) {
-            el.style.marginLeft = (100 / 12) * offset + "%";
-        }
-    },
-    getTitle: function () {
-        return this.schema.title;
-    },
-    getSelectInput: function (options, multiple) {
-        var el = this._super(options);
-        el.classList.add(
-            "block",
-            "w-full",
-            "px-1",
-            "text-sm",
-            "text-black",
-            "leading-normal",
-            "bg-white",
-            "border",
-            "border-grey",
-            "rounded"
-        );
-        return el;
-    },
-    afterInputReady: function (input) {
-        if (input.controlgroup) return;
-        input.controlgroup = this.closest(input, ".form-group");
-        if (this.closest(input, ".compact")) {
-            input.controlgroup.style.marginBottom = 0; //
-        }
+  // Config options that allows changing various aspects of the output
+  options: {
+    disable_theme_rules: false, // Disable creation of Inline Style Rules
+    label_bold: false, // Element labels bold
+    object_panel_default: true, //Indicates whether to use rules as default or alternate style
+    object_indent: true, // Indent nested object elements
+    object_border: false, // Add border around object elements
+    table_border: false, // Add border to array "table" row and cells
+    table_hdiv: false, // Add bottom-border to array "table" cells
+    table_zebrastyle: false, // Add "zebra style" to array "table" rows
+    input_size: "small", // Size of input and select elements. "small", "normal", "large"
+    enable_compact: false
+  },
+  // Custom stylesheet rules. (Does not suppert comma separated selectors)
+  //  Will create a stylesheet in document head with the id "theme-spectre" if not exists.
+  rules: {
+    ".slider": "-webkit-appearance: none;-moz-appearance: none;appearance: none;background: transparent;display: block;border: none;height: 1.2rem;width: 100%;",
+    ".slider:focus": "box-shadow: 0 0 0 0 rgba(87, 85, 217, .2); outline: none;",
+    ".slider.tooltip:not([data-tooltip])::after": "content: attr(value);",
+    ".slider::-webkit-slider-thumb": "-webkit-appearance: none;background: #F17405;border-radius: 100%;height: .6rem;margin-top: -.25rem;transition: transform .2s;width: .6rem;",
+    ".slider:active::-webkit-slider-thumb": "transform: scale(1.25); outline: none;",
+    ".slider::-webkit-slider-runnable-track": "background: #B2B4B6;border-radius: .1rem;height: .1rem;width: 100%;",
 
-        // TODO: use tailwind slider
-    },
-    getTextareaInput: function () {
-        var el = document.createElement("textarea");
-        el.classList.add(
-            "block",
-            "w-full",
-            "py-1",
-            "px-1",
-            "text-sm",
-            "leading-normal",
-            "bg-white",
-            "text-black",
-            "border",
-            "border-grey",
-            "rounded"
-        );
-        return el;
-    },
-    getRangeInput: function (min, max, step) {
-        // TODO: use better slider
-        return this._super(min, max, step);
-    },
-    getFormInputField: function (type) {
-        var el = this._super(type);
-        if (type !== "checkbox" && type !== "radio") {
-            el.classList.add(
-                "block",
-                "w-full",
-                "px-1",
-                "text-black",
-                "text-sm",
-                "leading-normal",
-                "bg-white",
-                "border",
-                "border-grey",
-                "rounded"
-            );
-        }
-        return el;
-    },
-    getFormInputDescription: function (text) {
-        var el = document.createElement("p");
-        el.classList.add("block", "mt-1");
-        if (window.DOMPurify) el.innerHTML = window.DOMPurify.sanitize(text);
-        else el.textContent = this.cleanText(text);
-        return el;
-    },
-    getFormControl: function (label, input, description) {
-        var group = document.createElement("div");
+    "a.tooltips": "position: relative;display: inline;",
+    "a.tooltips span": "position: absolute; white-space: nowrap; width:auto;padding-left:1rem;padding-right:1rem;color: #FFFFFF;background: rgba(56, 56, 56, 0.85);height:1.5rem;line-height: 1.5rem;text-align: center;visibility: hidden;border-radius: 3px;",
+    "a.tooltips span:after": "content: '';position: absolute;top: 50%;left: 100%;margin-top: -5px;width: 0; height: 0;border-left: 5px solid rgba(56, 56, 56, 0.85);border-top: 5px solid transparent;border-bottom: 5px solid transparent;",
+    "a:hover.tooltips span": "visibility: visible;opacity: 0.9;font-size:0.8rem;right: 100%;top: 50%;margin-top: -12px;margin-right: 10px;z-index: 999;",
 
-        if (label &&( input.type === "checkbox" || input.type === "radio")) {
-            group.classList.add(input.type, "mt-0");
-            label.appendChild(input);
-            label.classList.add("block", "mt-0", "text-xs");
-            group.appendChild(label);
-            input.classList.add("relative", "float-left", "mr-1");
-        } else {
-            group.classList.add("form-group", "mb-2");
-            if (label) {
-                label.classList.add("block", "text-black", "text-xs", "mb-1");
-                group.appendChild(label);
-            }
-            group.appendChild(input);
-        }
+    ".json-editor-btntype-properties+div": "font-size: .8rem;font-weight: normal;", // Fix fontsize in Properties modal
+    textarea: "width:100%;min-height: 2rem;resize:vertical", // Prevent textarea from being resized horizontally
+    table: "width:100%;border-collapse: collapse;", // Remove gap between table element borders
+    ".table td": "padding: .0rem .0rem;", // reduce table padding
+    'div[data-schematype]:not([data-schematype="object"])': "transition:.5s",
+    'div[data-schematype]:not([data-schematype="object"]):hover': "background-color: #E6F4FE",
+    'div[data-schemaid="root"]': "position: relative;width:inherit;display:inherit;overflow-x: hidden;z-index:10",
+    'select[multiple]':'height:auto;',
+    'select[multiple].from-select':'height:auto;',
+    ".je-table-zebra:nth-child(even)": "background-color: #f2f2f2;",
+    ".je-table-border": "border: 0.5px solid black;",
+    ".je-table-hdiv": "border-bottom: 1px solid black;",
+    ".je-border": "border:.05rem solid #3182CE",
+    ".je-panel": "width:inherit; padding:.2rem;margin:.2rem;background-color: rgba(218,222,228,.1)",
+    ".je-panel-top": "width:100%; padding:.2rem;margin:.2rem;background-color: rgba(218,222,228,.1)",
+    ".required:after": 'content: " *";color: red;font:inherit;font-weight: bold;',
+    ".je-desc": "font-size: smaller;margin: .2rem 0;",
+    ".container-xl.je-noindent": "padding-left:0;padding-right:0;",
+    ".json-editor-btntype-add": "color: white; margin:.3rem; padding: 0.3rem .8rem; background-color: #4299E1; box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-webkit-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-moz-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);",
+    ".json-editor-btntype-deletelast": "color: white;margin:.3rem; padding: 0.3rem .8rem; background-color: #E53E3E; box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-webkit-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-moz-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);",
+    ".json-editor-btntype-deleteall": "color: white;margin:.3rem; padding: 0.3rem .8rem; background-color: #000000; box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-webkit-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-moz-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);",
+    ".json-editor-btn-save": "float:right; color: white; margin: 0.3rem; padding: 0.3rem .8rem; background-color: #2B6CB0; box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-webkit-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-moz-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);",
+    ".json-editor-btn-back": "color: white; margin:.3rem; padding: 0.3rem .8rem; background-color: #2B6CB0; box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-webkit-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);-moz-box-shadow: 3px 3px 5px 1px rgba(4,4,4,0.2);",
+    ".json-editor-btntype-delete": "color: #E53E3E; background-color: rgba(218,222,228,.1);margin:.03rem; padding: 0.1rem;",
+    ".json-editor-btntype-move": "color: #000000; background-color: rgba(218,222,228,.1);margin:.03rem; padding: 0.1rem;",
+    ".json-editor-btn-collapse": "padding: 0em .8rem;font-size:1.3rem;color: #E53E3E;background-color: rgba(218,222,228,.1);"
+  },
 
-        if (description) group.appendChild(description);
+  getGridContainer: function() {
+    var el = document.createElement("div");
+    el.classList.add("flex", "flex-col", "w-full");
+    if (!this.options.object_indent) el.classList.add("je-noindent");
+    return el;
+  },
+  getGridRow: function() {
+    var el = document.createElement("div");
+    el.classList.add("flex", "flex-wrap", "w-full");
+    return el;
+  },
+  getGridColumn: function() {
+    var el = document.createElement("div");
+    el.classList.add("flex", "flex-col");
+    return el;
+  },
+  setGridColumnSize: function(el, size, offset) {
+    if (size > 0 && size < 12)
+      el.classList.add("w-" + size + "/12", "px-1");
+    else el.classList.add("w-full", "px-1");
 
-        return group;
-    },
-    getIndentedPanel: function () {
-        var el = document.createElement("div");
-        el.classList.add(
-            "relative",
-            "flex",
-            "flex-col",
-            "min-w-0",
-            "rounded",
-            "break-words",
-            "border",
-            "bg-white",
-            "border-0",
-            "border-blue-400",
-            "p-1",
-            "shadow-md"
-        );
-        return el;
-    },
-    getHeaderButtonHolder: function () {
-        var el = this.getButtonHolder();
-        el.classList.add("text-sm");
-        return el;
-    },
-    getButtonHolder: function () {
-        var el = document.createElement("div");
-        el.classList.add("relative", "inline-flex", "align-middle");
-        return el;
-    },
-    getButton: function (text, icon, title) {
-        var el = this._super(text, icon, title);
-        el.classList.add(
-            "inline-block",
-            "align-middle",
-            "text-center",
-            "text-sm",
-            "select-none",
-            "shadow",
-            "border",
-            "whitespace-no-wrap",
-            "py-1",
-            "px-3",
-            "m-1",
-            "rounded"
-        );
-        return el;
-    },
-    getTable: function () {
-        var el = document.createElement("table");
-        el.classList.add("table", "border", "w-auto", "p-0");
-        return el;
-    },
-    getTableRow: function () {
-        return document.createElement("tr");
-    },
-    getTableHead: function () {
-        return document.createElement("thead");
-    },
-    getTableBody: function () {
-        return document.createElement("tbody");
-    },
-    getTableHeaderCell: function (text) {
-        var el = document.createElement("th");
-        el.classList.add("text-xs", "border", "w-auto", "p-0");
-        el.textContent = text;
-        return el;
-    },
-    getTableCell: function () {
-        var el = document.createElement("td");
-        el.classList.add("border", "w-auto", "p-0", "m-0");
-        return el;
-    },
-    addInputError: function (input, text) {
-        if (!input.controlgroup) return;
-        input.controlgroup.classList.add("has-danger");
-        input.classList.add("bg-red-600");
-        if (!input.errmsg) {
-            input.errmsg = document.createElement("p");
-            input.errmsg.classList.add("block", "mt-1", "text-xs", "text-red");
-            input.controlgroup.appendChild(input.errmsg);
-        } else {
-            input.errmsg.classList.remove("block");
-            input.errmsg.classList.add("hidden");
-        }
-        input.errmsg.textContent = text;
-    },
-    removeInputError: function (input) {
-        if (!input.errmsg) return;
-        input.errmsg.style.display = "hidden";
-        input.classList.remove("bg-red-600");
-        input.controlgroup.classList.remove("has-danger");
-    },
-    getTabHolder: function (propertyName) {
-        var el = document.createElement("div");
-        var pName = typeof propertyName === "undefined" ? "" : propertyName;
-        el.innerHTML = "<div class='w-2/12'  id='" + pName + "'><ul class='list-reset pl-0 mb-0'></ul></div><div class='w-10/12' id='" + pName + "'></div>";
-        el.classList.add("flex");
-        return el;
-    },
-    addTab: function (holder, tab) {
-        holder.children[0].children[0].appendChild(tab);
-    },
-    getTopTabHolder: function (propertyName) {
-        var pName = typeof propertyName === "undefined" ? "" : propertyName;
-        var el = document.createElement("div");
-        el.innerHTML = "<ul class='nav-tabs flex list-reset pl-0 mb-0 border-b border-grey-light' id='" + pName + "'></ul><div class='p-6 block' id='" + pName + "'></div>";
-        return el;
-    },
-    getTab: function (text, tabId) {
-        var liel = document.createElement("li");
-        liel.classList.add(
-            "nav-item",
-            "flex-col",
-            "text-center",
-            "text-white",
-            "bg-blue-500",
-            "shadow-md",
-            "border",
-            "p-2",
-            "mb-2",
-            "mr-2",
-            "hover:bg-blue-400",
-            "rounded"
-        );
-        var ael = document.createElement("a");
-        ael.classList.add("nav-link", "text-center");
-        ael.setAttribute("href", "#" + tabId);
-        ael.setAttribute("data-toggle", "tab");
-        ael.appendChild(text);
-        liel.appendChild(ael);
-        return liel;
-    },
-    getTopTab: function (text, tabId) {
-        var el = document.createElement("li");
-        el.classList.add("nav-item", "flex", "border-l", "border-t", "border-r");
-        var a = document.createElement("a");
-        a.classList.add(
-            "nav-link",
-            "-mb-px",
-            "flex-row",
-            "text-center",
-            "bg-white",
-            "p-2",
-            "hover:bg-blue-400",
-            "rounded-t"
-        );
-        a.setAttribute("href", "#" + tabId);
-        a.setAttribute("data-toggle", "tab");
-        a.appendChild(text);
-        el.appendChild(a);
-        return el;
-    },
-    getTabContent: function () {
-        var el = document.createElement("div");
-        el.setAttribute("role", "tabpanel");
-        return el;
-    },
-    getTopTabContent: function () {
-        var el = document.createElement("div");
-        el.setAttribute("role", "tabpanel");
-        return el;
-    },
-    markTabActive: function (row) {
-        row.tab.firstChild.classList.add("block");
-        if (row.tab.firstChild.classList.contains("border-b") == true) {
-            row.tab.firstChild.classList.add("border-b-0");
-            row.tab.firstChild.classList.remove("border-b");
-        } else {
-            row.tab.firstChild.classList.add("border-b-0");
-        }
-        if (row.container.classList.contains("hidden") == true) {
-            row.container.classList.remove("hidden");
-            row.container.classList.add("block");
-        } else {
-            row.container.classList.add("block");
-        }
-    },
-    markTabInactive: function (row) {
-        if (row.tab.firstChild.classList.contains("border-b-0") == true) {
-            row.tab.firstChild.classList.add("border-b");
-            row.tab.firstChild.classList.remove("border-b-0");
-        } else {
-            row.tab.firstChild.classList.add("border-b");
-        }
-        if (row.container.classList.contains("block") == true) {
-            row.container.classList.remove("block");
-            row.container.classList.add("hidden");
-        }
-    },
-    getProgressBar: function () {
-        var min = 0,
-            max = 100,
-            start = 0;
-
-        var container = document.createElement("div");
-        container.classList.add("progress");
-
-        var bar = document.createElement("div");
-        bar.classList.add(
-            "bg-blue",
-            "leading-none",
-            "py-1",
-            "text-xs",
-            "text-center",
-            "text-white"
-        );
-        bar.setAttribute("role", "progressbar");
-        bar.setAttribute("aria-valuenow", start);
-        bar.setAttribute("aria-valuemin", min);
-        bar.setAttribute("aria-valuenax", max);
-        bar.innerHTML = start + "%";
-        container.appendChild(bar);
-
-        return container;
-    },
-    updateProgressBar: function (progressBar, progress) {
-        if (!progressBar) return;
-
-        var bar = progressBar.firstChild;
-        var percentage = progress + "%";
-        bar.setAttribute("aria-valuenow", progress);
-        bar.style.width = percentage;
-        bar.innerHTML = percentage;
-    },
-    updateProgressBarUnknown: function (progressBar) {
-        if (!progressBar) return;
-
-        var bar = progressBar.firstChild;
-        progressBar.classList.add(
-            "progress",
-            "bg-blue",
-            "leading-none",
-            "py-1",
-            "text-xs",
-            "text-center",
-            "text-white",
-            "block"
-        );
-        bar.removeAttribute("aria-valuenow");
-        bar.classList.add("w-full");
-        bar.innerHTML = "";
-    },
-    getInputGroup: function (input, buttons) {
-        if (!input) return;
-
-        var inputGroupContainer = document.createElement("div");
-        inputGroupContainer.classList.add("relative", "items-stretch", "w-full");
-        inputGroupContainer.appendChild(input);
-
-        var inputGroup = document.createElement("div");
-        inputGroup.classList.add("-mr-1");
-        inputGroupContainer.appendChild(inputGroup);
-
-        for (var i = 0; i < buttons.length; i++) {
-            inputGroup.appendChild(buttons[i]);
-        }
-
-        return inputGroupContainer;
+    if (offset) el.style.marginLeft = (100 / 12) * offset + "%";
+  },
+  getIndentedPanel: function() {
+    var el = document.createElement("div");
+    if (this.options.object_panel_default)
+      el.classList.add("w-full", "p-1");
+    else
+      el.classList.add("relative","flex","flex-col","rounded","break-words","border","bg-white","border-0","border-blue-400","p-1","shadow-md");
+    if (this.options.object_border) el.classList.add("je-border");
+    return el;
+  },
+  // Used for "type: array" with "format: tabs-top"
+  getTopIndentedPanel: function() {
+    var el = document.createElement("div");
+    if (this.options.object_panel_default)
+      el.classList.add("w-full", "m-2");
+    else
+      el.classList.add( "relative", "flex", "flex-col", "rounded", "break-words", "border", "bg-white", "border-0", "border-blue-400", "p-1", "shadow-md");
+    if (this.options.object_border) el.classList.add("je-border");
+    return el;
+  },
+  getTitle: function() {
+    return this.schema.title;
+  },
+  getSelectInput: function(options, multiple) {
+    var el = this._super(options);
+    if (multiple) el.classList.add( "form-multiselect","block","py-0","h-auto","w-full","px-1","text-sm","text-black","leading-normal","bg-white","border","border-grey","rounded");
+    else el.classList.add( "form-select","block","py-0","h-6","w-full","px-1","text-sm","text-black","leading-normal","bg-white","border","border-grey","rounded");
+    if (this.options.enable_compact) el.classList.add("compact");
+    return el;
+  },
+  afterInputReady: function(input) {
+    if (input.controlgroup) return;
+    input.controlgroup = this.closest(input, ".form-group");
+    if (this.closest(input, ".compact")) {
+      input.controlgroup.style.marginBottom = 0;
     }
+  },
+  getTextareaInput: function() {
+    var el = this._super();
+    el.classList.add("block","w-full","px-1","text-sm","leading-normal","bg-white","text-black","border","border-grey","rounded");
+    if (this.options.enable_compact) el.classList.add("compact");
+    el.style.height = 0;
+    return el;
+  },
+  // Create input field for type="range"
+  getRangeInput: function(min, max, step) {
+    var el = this.getFormInputField("range");
+    el.classList.add("slider");
+    if (this.options.enable_compact) el.classList.add("compact");
+    el.setAttribute("oninput", 'this.setAttribute("value", this.value)');
+    el.setAttribute("min", min);
+    el.setAttribute("max", max);
+    el.setAttribute("step", step);
+    return el;
+  },
+  getRangeControl: function(input, output) {
+    var el = this._super(input, output);
+    el.classList.add("text-center", "text-black");
+    return el;
+  },
+  // Checkbox elements
+  getCheckbox: function() {
+    var el = this.getFormInputField("checkbox");
+    el.classList.add("form-checkbox", "text-red-600");
+    return el;
+  },
+  getCheckboxLabel: function(text, req) {
+    var el = this._super(text, req);
+    el.classList.add("inline-flex", "items-center");
+    return el;
+  },
+  getFormCheckboxControl: function(label, input, compact) {
+    label.insertBefore(input, label.firstChild); // Move input into label element
+    if (compact) label.classList.add("inline-flex flex-row");
+    return label;
+  },
+  getMultiCheckboxHolder: function(controls, label, description, infoText) {
+    var el = this._super(controls, label, description, infoText);
+    el.classList.add("inline-flex", "flex-col");
+    return el;
+  },
+  // Radio elements
+  getFormRadio: function(attributes) {
+    var el = this.getFormInputField("radio");
+    el.classList.add("form-radio", "text-red-600");
+    for (var key in attributes) {
+      el.setAttribute(key, attributes[key]);
+    }
+    return el;
+  },
+  getFormRadioLabel: function(text, req) {
+    var el = this._super(text, req);
+    el.classList.add("inline-flex", "items-center", "mr-2");
+    return el;
+  },
+  getFormRadioControl: function(label, input, compact) {
+    label.insertBefore(input, label.firstChild); // Move input into label element
+    if (compact) label.classList.add("form-radio");
+    return label;
+  },
+  getRadioHolder: function(schema, controls, label, description, infoText) {
+    var el = this._super(controls, label, description, infoText);
+    if (schema.options.layout == "h") el.classList.add("inline-flex", "flex-row");
+    else el.classList.add("inline-flex", "flex-col");
+    return el;
+  },
+  getFormInputLabel: function(text, req) {
+    var el = this._super(text, req);
+    if (this.options.label_bold) el.classList.add("font-bold");
+    else el.classList.add("required");
+    return el;
+  },
+  getFormInputField: function(type) {
+    var el = this._super(type);
+    if (["checkbox", "radio"].indexOf(type) < 0) el.classList.add("block","w-full","px-1","text-black","text-sm","leading-normal","bg-white","border","border-grey","rounded");
+    if (this.options.enable_compact) el.classList.add("compact");
+    return el;
+  },
+  getFormInputDescription: function(text) {
+    var el = document.createElement("p");
+    el.classList.add("block", "mt-1", "text-xs");
+    if (window.DOMPurify) el.innerHTML = window.DOMPurify.sanitize(text);
+    else el.textContent = this.cleanText(text);
+    return el;
+  },
+  getFormControl: function(label, input, description, infoText) {
+    var group = document.createElement("div");
+    group.classList.add("form-group", "mb-1", "w-full");
+    if (label) {
+      label.classList.add("text-xs");
+
+      if (input.type == "checkbox") {
+        input.classList.add("form-checkbox","text-xs","text-red-600","mr-1");
+        label.classList.add("items-center", "flex");
+        label = this.getFormCheckboxControl(label, input, false, infoText);
+      }
+
+      if (input.type == "radio") {
+         input.classList.add("form-radio", "text-red-600", "mr-1");
+         label.classList.add("items-center", "flex");
+         label = this.getFormRadioControl(label, input, false, infoText);
+      }
+      group.appendChild(label);
+
+      if (["checkbox", "radio"].indexOf(input.type) < 0 && infoText) group.appendChild(infoText);
+    }
+    if (["checkbox", "radio"].indexOf(input.type) < 0) {
+      if (this.options.input_size === "small") input.classList.add("text-xs");
+      else if (this.options.input_size === "normal") input.classList.add("text-base");
+      else if (this.options.input_size === "large") input.classList.add("text-xl");
+      group.appendChild(input);
+    }
+
+    if (description) group.appendChild(description);
+
+    return group;
+  },
+  getHeaderButtonHolder: function() {
+    var el = this.getButtonHolder();
+    el.classList.add("text-sm");
+    return el;
+  },
+  getButtonHolder: function() {
+    var el = document.createElement("div");
+    el.classList.add("flex", "relative", "inline-flex", "align-middle");
+    return el;
+  },
+  getButton: function(text, icon, title) {
+    var el = this._super(text, icon, title);
+    el.classList.add("inline-block","align-middle","text-center","text-sm","bg-blue-700","text-white","py-1","pr-1","m-2","shadow","select-none","whitespace-no-wrap","rounded");
+    return el;
+  },
+  // Button for displaying infotext tooltip
+  getInfoButton: function(text) {
+    var tooltip = document.createElement("a");
+    tooltip.classList.add("tooltips", "float-right");
+    tooltip.innerHTML = "ⓘ";
+    var span = document.createElement("span");
+    span.innerHTML = text;
+    tooltip.appendChild(span);
+
+    return tooltip;
+  },
+  getTable: function() {
+    var el = this._super();
+    if (this.options.table_border) el.classList.add("je-table-border");
+    else el.classList.add("table", "border", "p-0");
+    return el;
+  },
+  getTableRow: function() {
+    var el = this._super();
+    if (this.options.table_border) el.classList.add("je-table-border");
+    if (this.options.table_zebrastyle) el.classList.add("je-table-zebra");
+    return el;
+  },
+  getTableHeaderCell: function(text) {
+    var el = this._super(text);
+    if (this.options.table_border) el.classList.add("je-table-border");
+    else if (this.options.table_hdiv) el.classList.add("je-table-hdiv");
+    else el.classList.add("text-xs", "border", "p-0", "m-0");
+    return el;
+  },
+  getTableCell: function() {
+    var el = this._super();
+    if (this.options.table_border) el.classList.add("je-table-border");
+    else if (this.options.table_hdiv) el.classList.add("je-table-hdiv");
+    else el.classList.add("border-0", "p-0", "m-0");
+    return el;
+  },
+  addInputError: function(input, text) {
+    if (!input.controlgroup) return;
+    input.controlgroup.classList.add("has-error");
+    input.classList.add("bg-red-600");
+    if (!input.errmsg) {
+      input.errmsg = document.createElement("p");
+      input.errmsg.classList.add("block", "mt-1", "text-xs", "text-red");
+      input.controlgroup.appendChild(input.errmsg);
+    } else {
+      input.errmsg.style.display = "";
+    }
+    input.errmsg.textContent = text;
+  },
+  removeInputError: function(input) {
+    if (!input.errmsg) return;
+    input.errmsg.style.display = "none";
+    input.classList.remove("bg-red-600");
+    input.controlgroup.classList.remove("has-error");
+  },
+  getTabHolder: function(propertyName) {
+    var el = document.createElement("div");
+    var pName = typeof propertyName === "undefined" ? "" : propertyName;
+    el.innerHTML ="<div class='w-2/12' id='" +pName +"'><ul class='list-reset pl-0 mb-0'></ul></div><div class='w-10/12' id='" +pName +"'></div>";
+    el.classList.add("flex");
+    return el;
+  },
+  addTab: function(holder, tab) {
+    holder.children[0].children[0].appendChild(tab);
+  },
+  getTopTabHolder: function(propertyName) {
+    var pName = typeof propertyName === "undefined" ? "" : propertyName;
+    var el = document.createElement("div");
+    el.innerHTML ="<ul class='nav-tabs flex list-reset pl-0 mb-0 border-b border-grey-light' id='" +pName +"'></ul><div class='p-6 block' id='" +pName +"'></div>";
+    return el;
+  },
+  getTab: function(text, tabId) {
+    var liel = document.createElement("li");
+    liel.classList.add("nav-item","flex-col","text-center","text-white","bg-blue-500","shadow-md","border","p-2","mb-2","mr-2","hover:bg-blue-400","rounded");
+    var ael = document.createElement("a");
+    ael.classList.add("nav-link", "text-center");
+    ael.setAttribute("href", "#" + tabId);
+    ael.setAttribute("data-toggle", "tab");
+    ael.appendChild(text);
+    liel.appendChild(ael);
+    return liel;
+  },
+  getTopTab: function(text, tabId) {
+    var el = document.createElement("li");
+    el.classList.add("nav-item","flex","border-l","border-t","border-r");
+    var a = document.createElement("a");
+    a.classList.add("nav-link","-mb-px","flex-row","text-center","bg-white","p-2","hover:bg-blue-400","rounded-t");
+    a.setAttribute("href", "#" + tabId);
+    a.setAttribute("data-toggle", "tab");
+    a.appendChild(text);
+    el.appendChild(a);
+    return el;
+  },
+  getTabContent: function() {
+    var el = document.createElement("div");
+    el.setAttribute("role", "tabpanel");
+    return el;
+  },
+  getTopTabContent: function() {
+    var el = document.createElement("div");
+    el.setAttribute("role", "tabpanel");
+    return el;
+  },
+  markTabActive: function(row) {
+    row.tab.firstChild.classList.add("block");
+    if (row.tab.firstChild.classList.contains("border-b") == true) {
+      row.tab.firstChild.classList.add("border-b-0");
+      row.tab.firstChild.classList.remove("border-b");
+    } else {
+      row.tab.firstChild.classList.add("border-b-0");
+    }
+    if (row.container.classList.contains("hidden") == true) {
+      row.container.classList.remove("hidden");
+      row.container.classList.add("block");
+    } else {
+      row.container.classList.add("block");
+    }
+  },
+  markTabInactive: function(row) {
+    if (row.tab.firstChild.classList.contains("border-b-0") == true) {
+      row.tab.firstChild.classList.add("border-b");
+      row.tab.firstChild.classList.remove("border-b-0");
+    } else {
+      row.tab.firstChild.classList.add("border-b");
+    }
+    if (row.container.classList.contains("block") == true) {
+      row.container.classList.remove("block");
+      row.container.classList.add("hidden");
+    }
+  },
+  getProgressBar: function() {
+    var min = 0,
+      max = 100,
+      start = 0;
+
+    var container = document.createElement("div");
+    container.classList.add("progress");
+
+    var bar = document.createElement("div");
+    bar.classList.add("bg-blue","leading-none","py-1","text-xs","text-center","text-white");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuenow", start);
+    bar.setAttribute("aria-valuemin", min);
+    bar.setAttribute("aria-valuenax", max);
+    bar.innerHTML = start + "%";
+    container.appendChild(bar);
+
+    return container;
+  },
+  updateProgressBar: function(progressBar, progress) {
+    if (!progressBar) return;
+
+    var bar = progressBar.firstChild;
+    var percentage = progress + "%";
+    bar.setAttribute("aria-valuenow", progress);
+    bar.style.width = percentage;
+    bar.innerHTML = percentage;
+  },
+  updateProgressBarUnknown: function(progressBar) {
+    if (!progressBar) return;
+
+    var bar = progressBar.firstChild;
+    progressBar.classList.add("progress","bg-blue","leading-none","py-1","text-xs","text-center","text-white","block");
+    bar.removeAttribute("aria-valuenow");
+    bar.classList.add("w-full");
+    bar.innerHTML = "";
+  },
+  getInputGroup: function(input, buttons) {
+    if (!input) return;
+
+    var inputGroupContainer = document.createElement("div");
+    inputGroupContainer.classList.add("relative","items-stretch","w-full");
+    inputGroupContainer.appendChild(input);
+
+    var inputGroup = document.createElement("div");
+    inputGroup.classList.add("-mr-1");
+    inputGroupContainer.appendChild(inputGroup);
+
+    for (var i = 0; i < buttons.length; i++) {
+      inputGroup.appendChild(buttons[i]);
+    }
+
+    return inputGroupContainer;
+  }
 });
 
 JSONEditor.AbstractIconLib = Class.extend({

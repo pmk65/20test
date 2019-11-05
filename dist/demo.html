@@ -34,7 +34,7 @@
 
   window.mappingOverride = {
         jsoneditor: {
-          js: 'js/jsoneditor.js'
+          js: '../dist/nonmin/jsoneditor.js'
         }
       };
 
@@ -465,6 +465,10 @@ jseditor = new window.JSONEditor(document.querySelector("#json-editor-form"), je
               <label>
                 <input type="checkbox" id="lib_cleavejs" value="lib_cleavejs">
                 <span>Cleave.js</span>
+              </label>
+              <label>
+                <input type="checkbox" id="lib_imaskjs" value="lib_imaskjs">
+                <span>Imask.js</span>
               </label>
               <label>
                 <input type="checkbox" id="lib_jodit" value="lib_jodit">

@@ -31,6 +31,10 @@
         "file": "recursive"
       },
       {
+        "title": "Complex schema that express a node tree",
+        "file": "complex-schema"
+      },
+      {
         "title": "Payment Method (oneOf)",
         "file": "oneof-payment-method"
       },
@@ -110,6 +114,10 @@
       {
         "title": "Jodit WYSIWYG Editor",
         "file": "jodit"
+      },
+      {
+        "title": "IMask.js",
+        "file": "imask"
       },
       {
         "title": "Radio Buttons",
@@ -208,6 +216,10 @@
       {
         "title": "Optgroup for select lists",
         "file": "optgroup-for-select-lists"
+      },
+      {
+        "title": "Detect/capture field changes",
+        "file": "detect-field-change"
       }
     ]
   },
@@ -248,8 +260,16 @@
         "file": "selectize-test"
       },
       {
+        "title": "Bootstrap4 Theme",
+        "file": "bootstrap4-theme-tester"
+      },
+      {
         "title": "Spectre Theme",
         "file": "spectre-theme-tester"
+      },
+      {
+        "title": "Tailwind Theme",
+        "file": "tailwind-theme-tester"
       }
     ]
   },
